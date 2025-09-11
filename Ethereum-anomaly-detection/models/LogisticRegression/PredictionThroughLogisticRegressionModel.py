@@ -6,6 +6,8 @@ from category_encoders import TargetEncoder
 from sklearn.preprocessing import StandardScaler
 import os
 
+
+
 for dirname, _, filenames in os.walk('.'):
     for filename in filenames:
         print(os.path.join(dirname, filename))
@@ -32,7 +34,7 @@ scaler = StandardScaler()
 XTs = scaler.fit_transform(XTe)
 
 
-model = pickle.load(open('model.pkl','rb'))
+model = pickle.load(open('LogisticRegressionmodel.pkl', 'rb'))
 
 # Prediction in range
 # for i in range(7000,8500):
