@@ -12,6 +12,8 @@ for dirname, _, filenames in os.walk('.'):
     for filename in filenames:
         print(os.path.join(dirname, filename))
 df = pd.read_csv("transaction_dataset.csv")
+
+
 df.columns = df.columns.str.strip().str.replace(r'\b\s+\b', '_', regex=True)
 df.drop(columns=['Unnamed: 0', 'Index', 'Address'], axis=0, inplace=True)
 categories = df.select_dtypes(include=['object']).columns

@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Load environment variables
 load_dotenv()
-ETHERSCAN_API_KEY = os.getenv('EtherscanAPI')
+ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
 
 # Etherscan API endpoint
 BASE_URL = "https://api.etherscan.io/api"
