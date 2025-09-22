@@ -1,15 +1,15 @@
+import argparse
+import sys
+import os
+import pandas as pd
+import numpy as np
+import pickle
 import requests
 import time
-import pandas as pd
 from collections import defaultdict
-import pickle
-import argparse
-import requests
-import pandas as pd
-import os
+import json
 from dotenv import load_dotenv
 import re
-import json
 
 # Load environment variables
 load_dotenv()
@@ -146,10 +146,8 @@ def calc_eth_values(txs, address):
     total_rec = sum(rec_vals)
     return min_rec, max_rec, avg_rec, min_sent, max_sent, avg_sent, total_sent, total_rec
 
-def calc_eth_contract_values(txs, address, api_key):
+def calc_eth_contract_values(txs, address, contract_cache):
     sent_txs = [tx for tx in txs if tx['from'].lower() == address.lower()]
-    unique_tos = set(tx['to'].lower() for tx in sent_txs if tx['to'])
-    contract_cache = {to: is_contract(to, api_key) for to in unique_tos}
     contract_sent_vals = []
     for tx in sent_txs:
         if tx['contractAddress'] != '':
@@ -192,11 +190,9 @@ def calc_erc20_values(erc_txs, address):
     avg_sent = total_sent / len(sent_vals) if sent_vals else 0.0
     return total_rec, total_sent, min_rec, max_rec, avg_rec, min_sent, max_sent, avg_sent
 
-def calc_erc20_contract_values(erc_txs, address, api_key):
+def calc_erc20_contract_values(erc_txs, address, contract_cache):
     sent_erc_txs = [tx for tx in erc_txs if tx['from'].lower() == address.lower()]
-    unique_erc_tos = set(tx['to'].lower() for tx in sent_erc_txs if tx['to'])
-    contract_cache = {to: is_contract(to, api_key) for to in unique_erc_tos}
-    contract_vals = [adjusted_value(tx) for tx in sent_erc_txs if tx['to'].lower() in contract_cache and contract_cache[tx['to'].lower()]]
+    contract_vals = [adjusted_value(tx) for tx in sent_erc_txs if tx['to'] and contract_cache.get(tx['to'].lower(), False)]
     total_contract = sum(contract_vals) if contract_vals else 0.0
     min_contract = min(contract_vals) if contract_vals else 0.0
     max_contract = max(contract_vals) if contract_vals else 0.0
@@ -212,7 +208,7 @@ def calc_erc20_unique_addresses(erc_txs, address):
     uniq_rec_contract_addr = len(set(tx['contractAddress'].lower() for tx in rec_erc_txs if tx['contractAddress']))
     return uniq_sent_addr, uniq_rec_addr, uniq_sent_contract_addr, uniq_rec_contract_addr
 
-def calc_erc20_time_metrics(erc_txs, address, api_key):
+def calc_erc20_time_metrics(erc_txs, address, contract_cache):
     sent_erc_txs = [tx for tx in erc_txs if tx['from'].lower() == address.lower()]
     rec_erc_txs = [tx for tx in erc_txs if tx['to'].lower() == address.lower()]
     avg_sent_time = calc_avg_min_between(sent_erc_txs)
@@ -224,7 +220,6 @@ def calc_erc20_time_metrics(erc_txs, address, api_key):
         avg_rec2_time = sum(diffs) / len(diffs) if diffs else 0.0
     unique_parties = set(tx['from'].lower() for tx in erc_txs) | set(tx['to'].lower() for tx in erc_txs if tx['to'])
     unique_parties.discard(address.lower())
-    contract_cache = {p: is_contract(p, api_key) for p in unique_parties}
     contract_txs = [tx for tx in erc_txs if contract_cache.get(tx['from'].lower(), False) or (tx['to'] and contract_cache.get(tx['to'].lower(), False))]
     avg_contract_time = calc_avg_min_between(contract_txs)
     return avg_sent_time, avg_rec_time, avg_rec2_time, avg_contract_time
@@ -259,134 +254,6 @@ def save_raw_data(txs, erc_txs, contract_cache, output_dir='.'):
         json.dump(contract_cache, f)
     print(f"Raw data saved to {output_dir}: transactions.csv, erc20_transactions.csv, contracts.json")
 
-# def get_transaction_and_metadata(address, api_key):
-#     txs = get_txlist(address, api_key, 'txlist')
-#     erc_txs = get_txlist(address, api_key, 'tokentx')
-#     if not txs:
-#         return pd.DataFrame([{
-#             'Unnamed: 0': 0,
-#             'Index': 1,
-#             'Address': address,
-#             'Avg_min_between_sent_tnx': 0.0,
-#             'Avg_min_between_received_tnx': 0.0,
-#             'Time_Diff_between_first_and_last_(Mins)': 0.0,
-#             'Sent_tnx': 0,
-#             'Received_Tnx': 0,
-#             'Number_of_Created_Contracts': 0,
-#             'Unique_Received_From_Addresses': 0,
-#             'Unique_Sent_To_Addresses': 0,
-#             'min_value_received': 0.0,
-#             'max_value_received': 0.0,
-#             'avg_val_received': 0.0,
-#             'min_val_sent': 0.0,
-#             'max_val_sent': 0.0,
-#             'avg_val_sent': 0.0,
-#             'min_value_sent_to_contract': 0.0,
-#             'max_val_sent_to_contract': 0.0,
-#             'avg_value_sent_to_contract': 0.0,
-#             'total_transactions_(including_tnx_to_create_contract': 0,
-#             'total_Ether_sent': 0.0,
-#             'total_ether_received': 0.0,
-#             'total_ether_sent_contracts': 0.0,
-#             'total_ether_balance': 0.0,
-#             'Total_ERC20_tnxs': 0,
-#             'ERC20_total_Ether_received': 0.0,
-#             'ERC20_total_ether_sent': 0.0,
-#             'ERC20_total_Ether_sent_contract': 0.0,
-#             'ERC20_uniq_sent_addr': 0.0,
-#             'ERC20_uniq_rec_addr': 0.0,
-#             'ERC20_uniq_sent_addr.1': 0.0,
-#             'ERC20_uniq_rec_contract_addr': 0.0,
-#             'ERC20_avg_time_between_sent_tnx': 0.0,
-#             'ERC20_avg_time_between_rec_tnx': 0.0,
-#             'ERC20_avg_time_between_rec_2_tnx': 0.0,
-#             'ERC20_avg_time_between_contract_tnx': 0.0,
-#             'ERC20_min_val_rec': 0.0,
-#             'ERC20_max_val_rec': 0.0,
-#             'ERC20_avg_val_rec': 0.0,
-#             'ERC20_min_val_sent': 0.0,
-#             'ERC20_max_val_sent': 0.0,
-#             'ERC20_avg_val_sent': 0.0,
-#             'ERC20_min_val_sent_contract': 0.0,
-#             'ERC20_max_val_sent_contract': 0.0,
-#             'ERC20_avg_val_sent_contract': 0.0,
-#             'ERC20_uniq_sent_token_name': 0.0,
-#             'ERC20_uniq_rec_token_name': 0.0,
-#             'ERC20_most_sent_token_type': '',
-#             'ERC20_most_rec_token_type': ''
-#         }])
-#
-#     time_diff = calc_time_diff(txs)
-#     sent_count, rec_count = calc_sent_received_counts(txs, address)
-#     avg_sent_between = calc_avg_min_between([tx for tx in txs if tx['from'].lower() == address.lower()])
-#     avg_rec_between = calc_avg_min_between([tx for tx in txs if tx['to'] and tx['to'].lower() == address.lower()])
-#     created_count = calc_created_contracts(txs, address)
-#     unique_rec_from, unique_sent_to = calc_unique_addresses(txs, address)
-#     min_rec, max_rec, avg_rec, min_sent, max_sent, avg_sent, total_sent, total_rec = calc_eth_values(txs, address)
-#     min_sent_contract, max_sent_contract, avg_sent_contract, total_sent_contracts = calc_eth_contract_values(txs, address, api_key)
-#     total_tx = calc_total_transactions(sent_count, rec_count)
-#     total_balance = calc_total_balance(total_sent, total_rec)
-#     total_erc_tnxs = calc_erc20_counts(erc_txs, address)
-#     erc_total_rec, erc_total_sent, erc_min_rec, erc_max_rec, erc_avg_rec, erc_min_sent, erc_max_sent, erc_avg_sent = calc_erc20_values(erc_txs, address)
-#     erc_total_sent_contract, erc_min_sent_contract, erc_max_sent_contract, erc_avg_sent_contract = calc_erc20_contract_values(erc_txs, address, api_key)
-#     erc_uniq_sent_addr, erc_uniq_rec_addr, erc_uniq_sent_addr1, erc_uniq_rec_contract = calc_erc20_unique_addresses(erc_txs, address)
-#     erc_avg_sent_time, erc_avg_rec_time, erc_avg_rec2_time, erc_avg_contract_time = calc_erc20_time_metrics(erc_txs, address, api_key)
-#     erc_uniq_sent_token, erc_uniq_rec_token = calc_erc20_token_names(erc_txs, address)
-#     most_sent_type, most_rec_type = calc_erc20_most_token_types(erc_txs, address)
-#
-#     return pd.DataFrame([{
-#         'Unnamed: 0': 0,
-#         'Index': 1,
-#         'Address': address,
-#         'Avg_min_between_sent_tnx': avg_sent_between,
-#         'Avg_min_between_received_tnx': avg_rec_between,
-#         'Time_Diff_between_first_and_last_(Mins)': time_diff,
-#         'Sent_tnx': sent_count,
-#         'Received_Tnx': rec_count,
-#         'Number_of_Created_Contracts': created_count,
-#         'Unique_Received_From_Addresses': unique_rec_from,
-#         'Unique_Sent_To_Addresses': unique_sent_to,
-#         'min_value_received': min_rec,
-#         'max_value_received': max_rec,
-#         'avg_val_received': avg_rec,
-#         'min_val_sent': min_sent,
-#         'max_val_sent': max_sent,
-#         'avg_val_sent': avg_sent,
-#         'min_value_sent_to_contract': min_sent_contract,
-#         'max_val_sent_to_contract': max_sent_contract,
-#         'avg_value_sent_to_contract': avg_sent_contract,
-#         'total_transactions_(including_tnx_to_create_contract': total_tx,
-#         'total_Ether_sent': total_sent,
-#         'total_ether_received': total_rec,
-#         'total_ether_sent_contracts': total_sent_contracts,
-#         'total_ether_balance': total_balance,
-#         'Total_ERC20_tnxs': total_erc_tnxs,
-#         'ERC20_total_Ether_received': erc_total_rec,
-#         'ERC20_total_ether_sent': erc_total_sent,
-#         'ERC20_total_Ether_sent_contract': erc_total_sent_contract,
-#         'ERC20_uniq_sent_addr': float(erc_uniq_sent_addr),
-#         'ERC20_uniq_rec_addr': float(erc_uniq_rec_addr),
-#         'ERC20_uniq_sent_addr.1': float(erc_uniq_sent_addr1),
-#         'ERC20_uniq_rec_contract_addr': float(erc_uniq_rec_contract),
-#         'ERC20_avg_time_between_sent_tnx': erc_avg_sent_time,
-#         'ERC20_avg_time_between_rec_tnx': erc_avg_rec_time,
-#         'ERC20_avg_time_between_rec_2_tnx': erc_avg_rec2_time,
-#         'ERC20_avg_time_between_contract_tnx': erc_avg_contract_time,
-#         'ERC20_min_val_rec': erc_min_rec,
-#         'ERC20_max_val_rec': erc_max_rec,
-#         'ERC20_avg_val_rec': erc_avg_rec,
-#         'ERC20_min_val_sent': erc_min_sent,
-#         'ERC20_max_val_sent': erc_max_sent,
-#         'ERC20_avg_val_sent': erc_avg_sent,
-#         'ERC20_min_val_sent_contract': erc_min_sent_contract,
-#         'ERC20_max_val_sent_contract': erc_max_sent_contract,
-#         'ERC20_avg_val_sent_contract': erc_avg_sent_contract,
-#         'ERC20_uniq_sent_token_name': erc_uniq_sent_token,
-#         'ERC20_uniq_rec_token_name': erc_uniq_rec_token,
-#         'ERC20_most_sent_token_type': most_sent_type,
-#         'ERC20_most_rec_token_type': most_rec_type
-#     }])
-
 def get_transaction_and_metadata(address, api_key, output_dir='.'):
     txs = get_txlist(address, api_key, 'txlist')
     erc_txs = get_txlist(address, api_key, 'tokentx')
@@ -404,8 +271,6 @@ def get_transaction_and_metadata(address, api_key, output_dir='.'):
         unique_addrs.add(tx.get('to', '').lower())
         unique_addrs.add(tx.get('contractAddress', '').lower())
     unique_addrs.discard('')
-
-
 
     contract_cache = {addr: is_contract(addr, api_key) for addr in unique_addrs}
     print(contract_cache)
@@ -475,7 +340,7 @@ def get_transaction_and_metadata(address, api_key, output_dir='.'):
     created_count = calc_created_contracts(txs, address)
     unique_rec_from, unique_sent_to = calc_unique_addresses(txs, address)
     min_rec, max_rec, avg_rec, min_sent, max_sent, avg_sent, total_sent, total_rec = calc_eth_values(txs, address)
-    min_sent_contract, max_sent_contract, avg_sent_contract, total_sent_contracts = calc_eth_contract_values(txs,address,contract_cache)
+    min_sent_contract, max_sent_contract, avg_sent_contract, total_sent_contracts = calc_eth_contract_values(txs, address, contract_cache)
     total_tx = calc_total_transactions(sent_count, rec_count)
     total_balance = calc_total_balance(total_sent, total_rec)
     total_erc_tnxs = calc_erc20_counts(erc_txs, address)
@@ -486,9 +351,9 @@ def get_transaction_and_metadata(address, api_key, output_dir='.'):
     erc_uniq_sent_token, erc_uniq_rec_token = calc_erc20_token_names(erc_txs, address)
     most_sent_type, most_rec_type = calc_erc20_most_token_types(erc_txs, address)
 
-    FirstContract=0
+    FirstContract = 0
     if is_contract(address, api_key):
-        FirstContract=1
+        FirstContract = 1
 
     return pd.DataFrame([{
         'Unnamed: 0': 0,
@@ -509,13 +374,13 @@ def get_transaction_and_metadata(address, api_key, output_dir='.'):
         'min_val_sent': min_sent,
         'max_val_sent': max_sent,
         'avg_val_sent': avg_sent,
-        'min_value_sent_to_contract': 0.0, #min_sent_contract,
-        'max_val_sent_to_contract': 0.0, #max_sent_contract,
-        'avg_value_sent_to_contract': 0.0, #avg_sent_contract,
+        'min_value_sent_to_contract': 0.0,  # min_sent_contract,
+        'max_val_sent_to_contract': 0.0,  # max_sent_contract,
+        'avg_value_sent_to_contract': 0.0,  # avg_sent_contract,
         'total_transactions_(including_tnx_to_create_contract': total_tx + FirstContract,
         'total_Ether_sent': total_sent,
         'total_ether_received': total_rec,
-        'total_ether_sent_contracts': 0.0, #total_sent_contracts,
+        'total_ether_sent_contracts': 0.0,  # total_sent_contracts,
         'total_ether_balance': total_balance,
         'Total_ERC20_tnxs': total_erc_tnxs,
         'ERC20_total_Ether_received': erc_total_rec,
@@ -525,78 +390,183 @@ def get_transaction_and_metadata(address, api_key, output_dir='.'):
         'ERC20_uniq_rec_addr': float(erc_uniq_rec_addr),
         'ERC20_uniq_sent_addr.1': float(erc_uniq_sent_addr1),
         'ERC20_uniq_rec_contract_addr': float(erc_uniq_rec_contract),
-        'ERC20_avg_time_between_sent_tnx': 0.0, #erc_avg_sent_time,
-        'ERC20_avg_time_between_rec_tnx': 0.0, #erc_avg_rec_time,
-        'ERC20_avg_time_between_rec_2_tnx': 0.0, #erc_avg_rec2_time,
-        'ERC20_avg_time_between_contract_tnx': 0.0, #erc_avg_contract_time,
+        'ERC20_avg_time_between_sent_tnx': 0.0,  # erc_avg_sent_time,
+        'ERC20_avg_time_between_rec_tnx': 0.0,  # erc_avg_rec_time,
+        'ERC20_avg_time_between_rec_2_tnx': 0.0,  # erc_avg_rec2_time,
+        'ERC20_avg_time_between_contract_tnx': 0.0,  # erc_avg_contract_time,
         'ERC20_min_val_rec': erc_min_rec,
         'ERC20_max_val_rec': erc_max_rec,
         'ERC20_avg_val_rec': erc_avg_rec,
         'ERC20_min_val_sent': erc_min_sent,
         'ERC20_max_val_sent': erc_max_sent,
         'ERC20_avg_val_sent': erc_avg_sent,
-        'ERC20_min_val_sent_contract': 0.0, #erc_min_sent_contract,
-        'ERC20_max_val_sent_contract': 0.0, #erc_max_sent_contract,
-        'ERC20_avg_val_sent_contract': 0.0, #erc_avg_sent_contract,
+        'ERC20_min_val_sent_contract': 0.0,  # erc_min_sent_contract,
+        'ERC20_max_val_sent_contract': 0.0,  # erc_max_sent_contract,
+        'ERC20_avg_val_sent_contract': 0.0,  # erc_avg_sent_contract,
         'ERC20_uniq_sent_token_name': erc_uniq_sent_token,
         'ERC20_uniq_rec_token_name': erc_uniq_rec_token,
         'ERC20_most_sent_token_type': most_sent_type,
         'ERC20_most_rec_token_type': most_rec_type
     }])
 
-def cal(address, EtherscanAPI):
-    # Get the transformed data
-    df_new = get_transaction_and_metadata(address, EtherscanAPI)
-    print("Transformed dataset row:")
-    print(df_new.to_string(index=False))
-    save_to_csv(df_new)
-    # Save to CSV for further use
-    df_new.to_csv('new_transaction_data.csv', index=False)
-    print("\nData saved to 'new_transaction_data.csv'")
+# Prediction functions from the predict module
+
+def load_real_data(csv_path):
+    """
+    Load single-row Etherscan data and clean it to match training pipeline
+    """
+    df = pd.read_csv(csv_path)
+    print(f"Raw data loaded with shape: {df.shape}")
+
+    # Clean column names (matching notebook)
+    df.columns = df.columns.str.strip().str.replace(r'\s+', '_', regex=True)
+    df.columns = [col.strip().replace(' ', '_') for col in df.columns]
+    print(f"Cleaned column names: {len(df.columns)} columns")
+
+    # Drop metadata and problematic categorical columns (same as training)
+    columns_to_drop = [
+        'Unnamed:_0', 'Index', 'Address',  # Metadata
+        'ERC20_most_sent_token_type',  # Categorical 1
+        'ERC20_most_rec_token_type'  # Categorical 2
+    ]
+    columns_to_drop = [col for col in columns_to_drop if col in df.columns]
+    print(f"Dropping columns: {columns_to_drop}")
+
+    df_clean = df.drop(columns=columns_to_drop, errors='ignore')
+
+    # Fill NaNs with 0 (same as training)
+    df_clean = df_clean.fillna(0)
+
+    # Ensure all numeric (force float64)
+    for col in df_clean.columns:
+        df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
+
+    print(f"Final cleaned data shape: {df_clean.shape}")
+    print(f"All numeric: {df_clean.dtypes.apply(lambda x: np.issubdtype(x, np.number)).all()}")
+
+    return df_clean
+
+def predict_fraud(input_file='input.csv', model_path='fraud_model.pkl'):
+    # Check if files exist
+    if not os.path.exists(model_path):
+        print(f"Model file not found: {model_path}")
+        print("Run the pickle dump in your notebook first!")
+        sys.exit(1)
+
+    if not os.path.exists(input_file):
+        print(f"Input file not found: {input_file}")
+        sys.exit(1)
+
+    # Load real data
+    try:
+        df_real = load_real_data(input_file)
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        sys.exit(1)
+
+    # Since it's a single row, extract it
+    if len(df_real) != 1:
+        print(f"Warning: Expected 1 row, got {len(df_real)} rows")
+
+    row_data = df_real.iloc[0]
+    address = row_data.get('Address', 'Unknown')  # Try to get address if not dropped
+
+    print(f"\n{'=' * 50}")
+    print(f"PREDICTING FOR ETHERSCAN DATA")
+    print(f"{'=' * 50}")
+    print(f"Address: {address}")
+    print(f"Contract: {'Yes' if row_data.get('Contract', 0) == 1 else 'No'}")
+    print(f"Total Transactions: {row_data.get('total_transactions_(including_tnx_to_create_contract', 0)}")
+    print(f"Total Ether Sent: {row_data.get('total_Ether_sent', 0):.6f}")
+    print(f"ERC20 Transactions: {row_data.get('Total_ERC20_tnxs', 0)}")
+    print(f"{'=' * 50}")
+
+    # Load the trained model
+    try:
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
+        print("✓ Model loaded successfully")
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        sys.exit(1)
+
+    # Prepare features (drop FLAG if it existed, but it won't for real data)
+    features = row_data.drop(labels=['FLAG'], errors='ignore')
+
+    # Ensure we have the right number of features (46 for training)
+    if len(features) != 46:
+        print(f"Warning: Expected 46 features, got {len(features)}")
+        print("Available features:", list(features.index))
+
+    # Convert to float and reshape for prediction
+    features = features.astype(float).values.reshape(1, -1)
+
+    # Make prediction
+    prediction = model.predict(features)[0]
+    prob = model.predict_proba(features)[0]
+
+    # Format output
+    fraud_prob = prob[1] * 100
+    non_fraud_prob = prob[0] * 100
+
+    print(f"\nPREDICTION RESULTS")
+    print(f"{'-' * 30}")
+    print(f"Prediction: {'FRAUD (1)' if prediction == 1 else '✅ NON-FRAUD (0)'}")
+    print(f"Confidence: {max(fraud_prob, non_fraud_prob):.1f}%")
+    print(f"Fraud Probability: {fraud_prob:.2f}%")
+    print(f"Non-Fraud Probability: {non_fraud_prob:.2f}%")
+
+    if prediction == 1:
+        print(f"\nALERT: This address shows fraudulent patterns!")
+        print(f"   • High fraud probability: {fraud_prob:.1f}%")
+        if fraud_prob > 95:
+            print(f"   • CRITICAL: Extremely high confidence ({fraud_prob:.1f}%)")
+        elif fraud_prob > 80:
+            print(f"   • HIGH: Strong fraud indicators ({fraud_prob:.1f}%)")
+    else:
+        print(f"\nSAFE: This address appears legitimate")
+        print(f"   • Low fraud probability: {fraud_prob:.1f}%")
+        if fraud_prob > 10:
+            print(f"   • MONITOR: Some suspicious activity detected ({fraud_prob:.1f}%)")
+
+    print(f"\nRaw Probabilities: Non-Fraud={prob[0]:.4f}, Fraud={prob[1]:.4f}")
+    print(f"{'=' * 50}")
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--address', required=True)
-    parser.add_argument('--api_key', default=ETHERSCAN_API_KEY, required=False)
+    parser = argparse.ArgumentParser(description="Ethereum Address Crawler and Fraud Predictor")
+    parser.add_argument('--C', action='store_true', help='Crawl mode: Crawl data for the address')
+    parser.add_argument('--CaP', action='store_true', help='Crawl and Predict mode: Crawl data and then predict fraud')
+    parser.add_argument('--P', nargs='?', const='input.csv', help='Predict mode: Predict fraud from CSV file (default: input.csv)')
+    parser.add_argument('--address', help='Ethereum address to crawl')
+    parser.add_argument('--api_key', default=ETHERSCAN_API_KEY, help='Etherscan API key (default from env)')
+
     args = parser.parse_args()
 
-    if args.address:
-        df_new = get_transaction_and_metadata(args.address, ETHERSCAN_API_KEY)
-        save_to_csv(df_new, 'out.csv')
+    mode_count = sum([args.C, args.CaP, args.P is not None])
+    if mode_count != 1:
+        parser.error("Exactly one mode must be specified: --C, --CaP, or --P")
 
+    if args.C or args.CaP:
+        if not args.address:
+            parser.error("--address is required for --C or --CaP modes")
+        if not args.api_key:
+            parser.error("--api_key is required (or set ETHERSCAN_API_KEY env) for --C or --CaP modes")
 
+        # Perform crawl
+        df_new = get_transaction_and_metadata(args.address, args.api_key)
+        print("Transformed dataset row:")
+        print(df_new.to_string(index=False))
+        crawl_output = 'out.csv'
+        save_to_csv(df_new, crawl_output)
+        print(f"\nData saved to '{crawl_output}'")
 
+        if args.CaP:
+            # Proceed to predict using the crawled data
+            predict_fraud(crawl_output)
 
-    # # For prediction: Load model and preprocess (inferred from notebook)
-    # # Note: Adjust onehot columns to match training if new categories appear.
-    # # This assumes you run the same preprocessing as in the notebook.
-    # try:
-    #     model = pickle.load(open(args.model_path, 'rb'))
-    #     # Preprocessing (inferred):
-    #     # Drop unnecessary columns
-    #     df_prep = df_new.drop(['Unnamed: 0', 'Index', 'Address'], axis=1).copy()
-    #     # Fill NaN
-    #     df_prep = df_prep.fillna(0)
-    #     df_prep['ERC20_most_sent_token_type'] = df_prep['ERC20_most_sent_token_type'].fillna('')
-    #     df_prep['ERC20_most_rec_token_type'] = df_prep['ERC20_most_rec_token_type'].fillna('')
-    #     # One-hot encode categoricals
-    #     onehot_sent = pd.get_dummies(df_prep[['ERC20_most_sent_token_type']], prefix='ERC20_most_sent_token_type')
-    #     onehot_rec = pd.get_dummies(df_prep[['ERC20_most_rec_token_type']], prefix='ERC20_most_rec_token_type')
-    #     # Concat
-    #     X_new = pd.concat([df_prep.drop(['ERC20_most_sent_token_type', 'ERC20_most_rec_token_type'], axis=1),
-    #                        onehot_sent, onehot_rec], axis=1)
-    #     # IMPORTANT: Reindex to match training columns if known, else may fail if new cats
-    #     # Assume training columns are known or use: X_new = X_new.reindex(columns=training_columns, fill_value=0)
-    #     # For now, predict if columns match
-    #     prediction = model.predict(X_new)[0]
-    #     prob = model.predict_proba(X_new)[0]
-    #     print(f"\nPrediction: {'Fraud (1)' if prediction == 1 else 'Non-Fraud (0)'}")
-    #     print(f"Probabilities (Non-Fraud, Fraud): [{prob[0]:.4f}, {prob[1]:.4f}]")
-    #     # If error due to column mismatch, adjust onehot to known categories only.
-    # except Exception as e:
-    #     print(f"\nPrediction failed: {e}")
-    #     print("Ensure preprocessing matches training (e.g., reindex to exact feature columns).")
+    elif args.P is not None:
+        input_file = args.P
+        predict_fraud(input_file)
 
 if __name__ == "__main__":
     main()
