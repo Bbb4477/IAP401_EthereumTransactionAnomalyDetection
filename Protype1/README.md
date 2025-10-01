@@ -34,8 +34,8 @@ Output: out.csv with 47 behavioral features
 
 #### Predict Fraud (from CSV)
 ```
-python main.py --P           # Uses out.csv
-python main.py --P out.csv   # Uses specific file
+python main.py --P --address 0x001b28141562bc2601694d27c3f5fda2c06c234c           # Uses out.csv
+python main.py --P out.csv --address 0x001b28141562bc2601694d27c3f5fda2c06c234c   # Uses specific file
 ```
 Output: Fraud probability & risk level
 
