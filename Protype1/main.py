@@ -360,9 +360,9 @@ def get_transaction_and_metadata(address, api_key):
     erc_uniq_sent_token, erc_uniq_rec_token = calc_erc20_token_names(erc_txs, address)
     most_sent_type, most_rec_type = calc_erc20_most_token_types(erc_txs, address)
 
-    FirstContract = 0
-    if is_contract(address, api_key):
-        FirstContract = 1
+    # FirstContract = 0
+    # if is_contract(address, api_key):
+    #     FirstContract = 1
 
     return pd.DataFrame([{
         'Unnamed: 0': 0,
@@ -375,7 +375,7 @@ def get_transaction_and_metadata(address, api_key):
         'Time_Diff_between_first_and_last_(Mins)': time_diff,
         'Sent_tnx': sent_count,
         'Received_Tnx': rec_count,
-        'Number_of_Created_Contracts': created_count + FirstContract,
+        'Number_of_Created_Contracts': created_count + tempContract,
         'Unique_Received_From_Addresses': unique_rec_from,
         'Unique_Sent_To_Addresses': unique_sent_to,
         'min_value_received': min_rec,
@@ -387,7 +387,7 @@ def get_transaction_and_metadata(address, api_key):
         'min_value_sent_to_contract': 0.0,  # min_sent_contract,
         'max_val_sent_to_contract': 0.0,  # max_sent_contract,
         'avg_value_sent_to_contract': 0.0,  # avg_sent_contract,
-        'total_transactions_(including_tnx_to_create_contract': total_tx + FirstContract,
+        'total_transactions_(including_tnx_to_create_contract': total_tx + tempContract,
         'total_Ether_sent': total_sent,
         'total_ether_received': total_rec,
         'total_ether_sent_contracts': 0.0,  # total_sent_contracts,
