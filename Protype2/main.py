@@ -347,7 +347,8 @@ def build_contract_cache(unique_addrs, api_key_input):
     # Identify addresses not in cache
     new_addrs = [addr for addr in unique_addrs if addr.lower() not in contract_cache]
     api_keys = load_api_keys(api_key_input)
-    print(f"Checking {len(new_addrs)} new addresses via Etherscan API ({len(api_keys)} keys in use)")
+    print(
+        f"Checking {len(new_addrs)} ({len(unique_addrs)}) new addresses via Etherscan API ({len(api_keys)} keys in use)")
 
     if not new_addrs:
         return contract_cache
@@ -440,9 +441,10 @@ def get_transaction_and_metadata(address, api_key):
     # Save raw data
     # save_raw_data(txs, erc_txs, contract_cache, address)
 
-    # Save contract cache
+    # Save contract cache for this address's unique addresses only
+    address_specific_cache = {addr: contract_cache[addr] for addr in unique_addrs if addr in contract_cache}
     with open(f'raw/contracts-{address.lower()}.json', 'w') as f:
-        json.dump(contract_cache, f)
+        json.dump(address_specific_cache, f)
     print(f"Contract cache saved to raw/contracts-{address.lower()}.json")
 
     if not txs:
