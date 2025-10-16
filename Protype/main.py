@@ -392,7 +392,7 @@ def build_contract_cache(unique_addrs, api_key_input):
             addr, is_contract_result = future.result()
             contract_cache[addr] = is_contract_result
             completed += 1
-            if completed % 100 == 0 or completed == len(new_addrs):
+            if completed % 500 == 0 or completed == len(new_addrs):
                 # Save to JSON every 100 calls or at the end
                 try:
                     with open(contract_cache_file, 'w') as f:
@@ -564,13 +564,13 @@ def get_transaction_and_metadata(address, api_key):
         'min_val_sent': min_sent,
         'max_val_sent': max_sent,
         'avg_val_sent': avg_sent,
-        'min_value_sent_to_contract': 0.0,  # min_sent_contract,
-        'max_val_sent_to_contract': 0.0,  # max_sent_contract,
-        'avg_value_sent_to_contract': 0.0,  # avg_sent_contract,
+        'min_value_sent_to_contract': min_sent_contract,
+        'max_val_sent_to_contract': max_sent_contract,
+        'avg_value_sent_to_contract': avg_sent_contract,
         'total_transactions_(including_tnx_to_create_contract': total_tx + tempContract,
         'total_Ether_sent': total_sent,
         'total_ether_received': total_rec,
-        'total_ether_sent_contracts': 0.0,  # total_sent_contracts,
+        'total_ether_sent_contracts': total_sent_contracts,
         'total_ether_balance': total_balance,
         'Total_ERC20_tnxs': total_erc_tnxs,
         'ERC20_total_Ether_received': erc_total_rec,
@@ -580,19 +580,19 @@ def get_transaction_and_metadata(address, api_key):
         'ERC20_uniq_rec_addr': float(erc_uniq_rec_addr),
         'ERC20_uniq_sent_addr.1': float(erc_uniq_sent_addr1),
         'ERC20_uniq_rec_contract_addr': float(erc_uniq_rec_contract),
-        'ERC20_avg_time_between_sent_tnx': 0.0,  # erc_avg_sent_time,
-        'ERC20_avg_time_between_rec_tnx': 0.0,  # erc_avg_rec_time,
-        'ERC20_avg_time_between_rec_2_tnx': 0.0,  # erc_avg_rec2_time,
-        'ERC20_avg_time_between_contract_tnx': 0.0,  # erc_avg_contract_time,
+        'ERC20_avg_time_between_sent_tnx': erc_avg_sent_time,
+        'ERC20_avg_time_between_rec_tnx': erc_avg_rec_time,
+        'ERC20_avg_time_between_rec_2_tnx': erc_avg_rec2_time,
+        'ERC20_avg_time_between_contract_tnx': erc_avg_contract_time,
         'ERC20_min_val_rec': erc_min_rec,
         'ERC20_max_val_rec': erc_max_rec,
         'ERC20_avg_val_rec': erc_avg_rec,
         'ERC20_min_val_sent': erc_min_sent,
         'ERC20_max_val_sent': erc_max_sent,
         'ERC20_avg_val_sent': erc_avg_sent,
-        'ERC20_min_val_sent_contract': 0.0,  # erc_min_sent_contract,
-        'ERC20_max_val_sent_contract': 0.0,  # erc_max_sent_contract,
-        'ERC20_avg_val_sent_contract': 0.0,  # erc_avg_sent_contract,
+        'ERC20_min_val_sent_contract': erc_min_sent_contract,
+        'ERC20_max_val_sent_contract': erc_max_sent_contract,
+        'ERC20_avg_val_sent_contract': erc_avg_sent_contract,
         'ERC20_uniq_sent_token_name': erc_uniq_sent_token,
         'ERC20_uniq_rec_token_name': erc_uniq_rec_token,
         'ERC20_most_sent_token_type': most_sent_type,
