@@ -133,10 +133,13 @@ def wei_to_eth(v_str):
     return int(v_str) / 1e18 if v_str else 0.0
 
 def adjusted_value(tx):
+    """
+        Adjusted to handle large values and clip to prevent overflow/extreme numbers.
+        """
     if not tx.get('value'):
         return 0.0
     try:
-        val = int(tx['value'])
+        val = float(tx['value'])  # Use float to handle large ints
     except ValueError:
         print(f"Warning: Invalid 'value' in tx: {tx.get('hash')}, skipping.")
         return 0.0
@@ -149,11 +152,17 @@ def adjusted_value(tx):
             f"Warning: Invalid 'tokenDecimal' '{decimal_str}' for token {tx.get('tokenName')} in tx: {tx.get('hash')}, defaulting to 18.")
         decimals = 18
 
+    # Clip decimals to prevent underflow/overflow
+    decimals = max(0, min(decimals, 100))  # Reasonable range for token decimals
+
     try:
-        return val / (10 ** decimals)
-    except OverflowError:
-        # Rare case for extremely large exponents, but unlikely with decimals ~0-18
-        return float(val) / (10.0 ** decimals)
+        adjusted = val / (10.0 ** decimals)
+        # Clip to prevent extreme values
+        adjusted = np.clip(adjusted, -1e18, 1e18)
+        return adjusted
+    except Exception as e:
+        print(f"Error adjusting value: {e}, returning 0.0")
+        return 0.0
 
 def calc_time_diff(txs):
     if not txs:
@@ -544,7 +553,9 @@ def get_transaction_and_metadata(address, api_key):
     # if is_contract(address, api_key):
     #     FirstContract = 1
 
-    return pd.DataFrame([{
+
+
+    df=pd.DataFrame([{
         'Unnamed: 0': 0,
         'Index': 1,
         'Address': address,
@@ -598,6 +609,23 @@ def get_transaction_and_metadata(address, api_key):
         'ERC20_most_sent_token_type': most_sent_type,
         'ERC20_most_rec_token_type': most_rec_type
     }])
+    # Handle infinite values with 0
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+
+    # Clip extremely large values to prevent overflow
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    df[numeric_cols] = df[numeric_cols].clip(lower=-1e18, upper=1e18)
+
+    # Verify no infinite or excessively large values
+    if np.isinf(df[numeric_cols].values).any():
+        print("WARNING: Infinite values still present!")
+    elif (df[numeric_cols].abs() > 1e18).any().any():
+        print("WARNING: Excessively large values still present!")
+    else:
+        print("✓ No infinite or excessively large values in data.")
+
+    return df
+
 
 # Prediction functions from the predict module
 
@@ -628,6 +656,21 @@ def load_real_data(csv_path):
 
     # Fill NaNs with 0 (same as training)
     df_clean = df_clean.fillna(0)
+
+    # NEW: Handle infinite values with 0
+    df_clean.replace([np.inf, -np.inf], 0, inplace=True)
+
+    # NEW: Clip extremely large values to prevent overflow
+    numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
+    df_clean[numeric_cols] = df_clean[numeric_cols].clip(lower=-1e18, upper=1e18)
+
+    # Verify no infinite or excessively large values
+    if np.isinf(df_clean[numeric_cols].values).any():
+        print("WARNING: Infinite values still present!")
+    elif (df_clean[numeric_cols].abs() > 1e18).any().any():
+        print("WARNING: Excessively large values still present!")
+    else:
+        print("✓ No infinite or excessively large values in data.")
 
     # Ensure all numeric (force float64)
     for col in df_clean.columns:
