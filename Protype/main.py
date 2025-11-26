@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import re
 import shap
 import concurrent.futures
+import threading
 # import matplotlib.pyplot as plt
 
 # Load environment variables
@@ -21,7 +22,7 @@ ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
 # Etherscan API endpoint (corrected to standard URL)
 BASE_URL = "https://api.etherscan.io/v2/api"
 
-def is_contract(addr, api_key):
+def is_contract(addr, api_key, timeout=None):
     """
     Check if an address is a contract using Etherscan API.
     """
@@ -36,12 +37,14 @@ def is_contract(addr, api_key):
         'apikey': api_key
     }
     try:
-        resp = requests.get(BASE_URL, params=params)
+        resp = requests.get(BASE_URL, params=params, timeout=timeout)
         if resp.status_code != 200:
             return False
         data = resp.json()
         code = data.get('result')
         return len(code) > 2
+    except requests.Timeout:
+        return None
     except Exception:
         return False
 
@@ -64,7 +67,7 @@ def get_txlist(address, api_key, action='txlist'):
     }
     try:
         resp = requests.get(BASE_URL, params=params)
-        time.sleep(0.2)  # Rate limit
+        time.sleep(2)  # Rate limit
         if resp.status_code != 200:
             return []
         data = resp.json()
@@ -133,13 +136,10 @@ def wei_to_eth(v_str):
     return int(v_str) / 1e18 if v_str else 0.0
 
 def adjusted_value(tx):
-    """
-        Adjusted to handle large values and clip to prevent overflow/extreme numbers.
-        """
     if not tx.get('value'):
         return 0.0
     try:
-        val = float(tx['value'])  # Use float to handle large ints
+        val = int(tx['value'])
     except ValueError:
         print(f"Warning: Invalid 'value' in tx: {tx.get('hash')}, skipping.")
         return 0.0
@@ -152,17 +152,11 @@ def adjusted_value(tx):
             f"Warning: Invalid 'tokenDecimal' '{decimal_str}' for token {tx.get('tokenName')} in tx: {tx.get('hash')}, defaulting to 18.")
         decimals = 18
 
-    # Clip decimals to prevent underflow/overflow
-    decimals = max(0, min(decimals, 100))  # Reasonable range for token decimals
-
     try:
-        adjusted = val / (10.0 ** decimals)
-        # Clip to prevent extreme values
-        adjusted = np.clip(adjusted, -1e18, 1e18)
-        return adjusted
-    except Exception as e:
-        print(f"Error adjusting value: {e}, returning 0.0")
-        return 0.0
+        return val / (10 ** decimals)
+    except OverflowError:
+        # Rare case for extremely large exponents, but unlikely with decimals ~0-18
+        return float(val) / (10.0 ** decimals)
 
 def calc_time_diff(txs):
     if not txs:
@@ -356,7 +350,8 @@ def calc_erc20_most_token_types(erc_txs, address):
 def build_contract_cache(unique_addrs, api_key_input):
     """
     Build contract cache by checking local JSON file and querying Etherscan only for missing addresses.
-    Uses multiple API keys in parallel, updates JSON file every 100 new calls with True/False statuses.
+    Uses multiple API keys in parallel, updates JSON file every 1000 new calls with True/False statuses.
+    Implements Fast First Wave + Immediate Serial Fallback for reliability and speed.
     """
     os.makedirs('raw', exist_ok=True)
     contract_cache_file = 'raw/contracts-total.json'
@@ -381,34 +376,68 @@ def build_contract_cache(unique_addrs, api_key_input):
     if not new_addrs:
         return contract_cache
 
-    # Distribute addresses across keys
+    # WAVE 1: Aggressive parallel with semaphore and timeouts
+    max_concurrent = len(api_keys) * 4  # Safe: 4 per key
+    sem = threading.Semaphore(max_concurrent)
+
     def check_contract(addr, key):
-        time.sleep(0.2)  # Respect 5 calls/sec per key
-        return addr.lower(), is_contract(addr, key)
+        with sem:
+            time.sleep(0.22)  # Respect ~4.5 calls/sec per key
+            result = is_contract(addr, key, timeout=60)
+            return addr.lower(), result
 
-    # Process addresses in parallel
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(api_keys) * 5) as executor:
-        # Round-robin assignment of keys
-        futures = []
+    failed = []
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+        futures = {}
         for i, addr in enumerate(new_addrs):
-            key = api_keys[i % len(api_keys)]  # Cycle through keys
-            futures.append(executor.submit(check_contract, addr, key))
+            key = api_keys[i % len(api_keys)]
+            future = executor.submit(check_contract, addr, key)
+            futures[future] = addr
 
-        # Collect results and update cache incrementally
-        completed = 0
         for future in concurrent.futures.as_completed(futures):
-            addr, is_contract_result = future.result()
-            contract_cache[addr] = is_contract_result
-            completed += 1
-            if completed % 500 == 0 or completed == len(new_addrs):
-                # Save to JSON every 100 calls or at the end
-                try:
-                    with open(contract_cache_file, 'w') as f:
-                        json.dump(contract_cache, f)
-                    print(f"{completed}/{len(new_addrs)} calls complete, updated {contract_cache_file}")
-                except Exception as e:
-                    print(f"Error saving {contract_cache_file} at {completed} calls: {e}")
+            addr = futures[future]
+            try:
+                addr_lower, result = future.result()
+                if result is not None:
+                    contract_cache[addr_lower] = result
+                    completed += 1
+                    if completed % 1000 == 0 or completed == len(new_addrs):
+                        try:
+                            with open(contract_cache_file, 'w') as f:
+                                json.dump(contract_cache, f)
+                            print(f"{completed}/{len(new_addrs)} calls complete, updated {contract_cache_file}")
+                        except Exception as e:
+                            print(f"Error saving {contract_cache_file} at {completed} calls: {e}")
+                else:
+                    failed.append(addr)
+            except Exception as e:
+                print(f"Error for {addr}: {e}")
+                failed.append(addr)
+
+    print(f"Wave 1 complete. {len(failed)} failed/timeout → starting serial fallback")
+
+    # SERIAL FALLBACK: Round-robin keys, no sleep, longer timeout
+    for i, addr in enumerate(failed):
+        key = api_keys[i % len(api_keys)]
+        result = is_contract(addr, key, timeout=90)
+        addr_lower = addr.lower()
+        if result is not None:
+            contract_cache[addr_lower] = result
+        else:
+            contract_cache[addr_lower] = False
+            print(f"Even serial timeout for {addr}, marking as False")
+        print(f"Serial fallback {i+1}/{len(failed)}: {addr[:10]}... OK")
+
+    # Final save after serial
+    try:
+        with open(contract_cache_file, 'w') as f:
+            json.dump(contract_cache, f)
+        print(f"Final update: {contract_cache_file}")
+    except Exception as e:
+        print(f"Error saving {contract_cache_file} at end: {e}")
+
+    print("Completed Crawling")
 
     return contract_cache
 
@@ -435,7 +464,7 @@ def load_api_keys(api_key_input=None):
 def get_transaction_and_metadata(address, api_key):
     # Fetch normal transactions and save immediately
     key_list = load_api_keys(api_key)
-    first_key = key_list[0] if key_list else None
+    first_key = key_list[-1] if key_list else None
     if not first_key:
         print("Error: No valid API key available")
         sys.exit(1)
@@ -532,30 +561,71 @@ def get_transaction_and_metadata(address, api_key):
         }])
 
     time_diff = calc_time_diff(txs)
+    print("time_diff: ", time_diff)
+
     sent_count, rec_count = calc_sent_received_counts(txs, address)
+    print("sent_count: ", sent_count, " rec_count: ", rec_count)
+
     avg_sent_between = calc_avg_min_between([tx for tx in txs if tx['from'].lower() == address.lower()])
+    print("avg_sent_between: ", avg_sent_between)
+
     avg_rec_between = calc_avg_min_between([tx for tx in txs if tx['to'] and tx['to'].lower() == address.lower()])
+    print("avg_rec_between: ", avg_rec_between)
+
     created_count = calc_created_contracts(txs, address)
+    print("created_count: ", created_count)
+
     unique_rec_from, unique_sent_to = calc_unique_addresses(txs, address)
+    print("unique_rec_from: ", unique_rec_from, " unique_sent_to: ", unique_sent_to)
+
     min_rec, max_rec, avg_rec, min_sent, max_sent, avg_sent, total_sent, total_rec = calc_eth_values(txs, address)
+    print("min_rec: ", min_rec, " max_rec: ", max_rec, " avg_rec: ", avg_rec,
+          " min_sent: ", min_sent, " max_sent: ", max_sent, " avg_sent: ", avg_sent,
+          " total_sent: ", total_sent, " total_rec: ", total_rec)
+
     min_sent_contract, max_sent_contract, avg_sent_contract, total_sent_contracts = calc_eth_contract_values(txs, address, contract_cache)
+    print("min_sent_contract: ", min_sent_contract, " max_sent_contract: ", max_sent_contract,
+          " avg_sent_contract: ", avg_sent_contract, " total_sent_contracts: ", total_sent_contracts)
+
     total_tx = calc_total_transactions(sent_count, rec_count)
+    print("total_tx: ", total_tx)
+
     total_balance = calc_total_balance(total_sent, total_rec)
+    print("total_balance: ", total_balance)
+
     total_erc_tnxs = calc_erc20_counts(erc_txs, address)
+    print("total_erc_tnxs: ", total_erc_tnxs)
+
     erc_total_rec, erc_total_sent, erc_min_rec, erc_max_rec, erc_avg_rec, erc_min_sent, erc_max_sent, erc_avg_sent = calc_erc20_values(erc_txs, address)
+    print("erc_total_rec: ", erc_total_rec, " erc_total_sent: ", erc_total_sent,
+          " erc_min_rec: ", erc_min_rec, " erc_max_rec: ", erc_max_rec, " erc_avg_rec: ", erc_avg_rec,
+          " erc_min_sent: ", erc_min_sent, " erc_max_sent: ", erc_max_sent, " erc_avg_sent: ", erc_avg_sent)
+
     erc_total_sent_contract, erc_min_sent_contract, erc_max_sent_contract, erc_avg_sent_contract = calc_erc20_contract_values(erc_txs, address, contract_cache)
+    print("erc_total_sent_contract: ", erc_total_sent_contract,
+          " erc_min_sent_contract: ", erc_min_sent_contract,
+          " erc_max_sent_contract: ", erc_max_sent_contract,
+          " erc_avg_sent_contract: ", erc_avg_sent_contract)
+
     erc_uniq_sent_addr, erc_uniq_rec_addr, erc_uniq_sent_addr1, erc_uniq_rec_contract = calc_erc20_unique_addresses(erc_txs, address)
+    print("erc_uniq_sent_addr: ", erc_uniq_sent_addr, " erc_uniq_rec_addr: ", erc_uniq_rec_addr,
+          " erc_uniq_sent_addr1: ", erc_uniq_sent_addr1, " erc_uniq_rec_contract: ", erc_uniq_rec_contract)
+
     erc_avg_sent_time, erc_avg_rec_time, erc_avg_rec2_time, erc_avg_contract_time = calc_erc20_time_metrics(erc_txs, address, contract_cache)
+    print("erc_avg_sent_time: ", erc_avg_sent_time, " erc_avg_rec_time: ", erc_avg_rec_time,
+          " erc_avg_rec2_time: ", erc_avg_rec2_time, " erc_avg_contract_time: ", erc_avg_contract_time)
+
     erc_uniq_sent_token, erc_uniq_rec_token = calc_erc20_token_names(erc_txs, address)
+    print("erc_uniq_sent_token: ", erc_uniq_sent_token, " erc_uniq_rec_token: ", erc_uniq_rec_token)
+
     most_sent_type, most_rec_type = calc_erc20_most_token_types(erc_txs, address)
+    print("most_sent_type: ", most_sent_type, " most_rec_type: ", most_rec_type)
 
     # FirstContract = 0
     # if is_contract(address, api_key):
     #     FirstContract = 1
 
-
-
-    df=pd.DataFrame([{
+    return pd.DataFrame([{
         'Unnamed: 0': 0,
         'Index': 1,
         'Address': address,
@@ -609,23 +679,6 @@ def get_transaction_and_metadata(address, api_key):
         'ERC20_most_sent_token_type': most_sent_type,
         'ERC20_most_rec_token_type': most_rec_type
     }])
-    # Handle infinite values with 0
-    df.replace([np.inf, -np.inf], 0, inplace=True)
-
-    # Clip extremely large values to prevent overflow
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    df[numeric_cols] = df[numeric_cols].clip(lower=-1e18, upper=1e18)
-
-    # Verify no infinite or excessively large values
-    if np.isinf(df[numeric_cols].values).any():
-        print("WARNING: Infinite values still present!")
-    elif (df[numeric_cols].abs() > 1e18).any().any():
-        print("WARNING: Excessively large values still present!")
-    else:
-        print("✓ No infinite or excessively large values in data.")
-
-    return df
-
 
 # Prediction functions from the predict module
 
@@ -656,21 +709,6 @@ def load_real_data(csv_path):
 
     # Fill NaNs with 0 (same as training)
     df_clean = df_clean.fillna(0)
-
-    # NEW: Handle infinite values with 0
-    df_clean.replace([np.inf, -np.inf], 0, inplace=True)
-
-    # NEW: Clip extremely large values to prevent overflow
-    numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
-    df_clean[numeric_cols] = df_clean[numeric_cols].clip(lower=-1e18, upper=1e18)
-
-    # Verify no infinite or excessively large values
-    if np.isinf(df_clean[numeric_cols].values).any():
-        print("WARNING: Infinite values still present!")
-    elif (df_clean[numeric_cols].abs() > 1e18).any().any():
-        print("WARNING: Excessively large values still present!")
-    else:
-        print("✓ No infinite or excessively large values in data.")
 
     # Ensure all numeric (force float64)
     for col in df_clean.columns:
