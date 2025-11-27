@@ -74,6 +74,10 @@ def get_txlist(address, api_key, action='txlist'):
         if data.get('status') == '0':
             print(f"API Error for {action}: {data.get('message', 'Unknown')}")
             return []
+        t=""
+        if action == 'tokentx':
+            t = "ERC20 "
+        print(f"{t}Transaction crawl Completed")
         return data['result']
     except Exception as e:
         print(f"Error fetching {action}: {e}")
@@ -110,27 +114,72 @@ def avg_min_erc(txs_list):
 #     except Exception as e:
 #         print(f"Error saving to CSV: {e}")
 
+# def save_to_csv(df, output_path='out.csv', mode='w'):
+#     """
+#     Save a DataFrame to a CSV file, appending or overwriting based on mode.
+#     Ensures no extra 'Unnamed' columns are added.
+#     """
+#     try:
+#         # Drop any 'Unnamed' columns from input DataFrame
+#         df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+#
+#         if mode == 'a' and os.path.exists(output_path):
+#             # Read existing CSV, drop 'Unnamed' columns, and filter out duplicate address
+#             existing_df = pd.read_csv(output_path)
+#             existing_df = existing_df.loc[:, ~existing_df.columns.str.contains('^Unnamed', na=False)]
+#             existing_df = existing_df[existing_df['Address'] != df['Address'].iloc[0]]
+#             df = pd.concat([existing_df, df], ignore_index=True)
+#
+#         # Save DataFrame without index to prevent 'Unnamed' columns
+#         df.to_csv(output_path, index=False)
+#         print(f"Data successfully saved to '{output_path}'")
+#     except Exception as e:
+#         print(f"Error saving to CSV: {e}")
+
 def save_to_csv(df, output_path='out.csv', mode='w'):
     """
-    Save a DataFrame to a CSV file, appending or overwriting based on mode.
-    Ensures no extra 'Unnamed' columns are added.
+    Save DataFrame to CSV:
+    - Only ASCII characters allowed in string columns
+    - Any non-ASCII character is replaced with '' (removed)
+    - Always saves in clean UTF-8
+    - Prevents encoding errors forever
     """
+    import pandas as pd
+    import os
+
+    def to_ascii_only(text):
+        if isinstance(text, str):
+            return ''.join(c if ord(c) < 128 else '' for c in text)  # Keep only ASCII < 128
+        return text
+
     try:
-        # Drop any 'Unnamed' columns from input DataFrame
+        # Apply ASCII-only cleaning to all string/object columns
+        df = df.copy()  # Avoid modifying original
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].apply(to_ascii_only)
+
+        # Remove any Unnamed columns
         df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
 
         if mode == 'a' and os.path.exists(output_path):
-            # Read existing CSV, drop 'Unnamed' columns, and filter out duplicate address
-            existing_df = pd.read_csv(output_path)
+            # Load existing file safely (with ASCII cleanup too)
+            existing_df = pd.read_csv(output_path, encoding='utf-8', dtype=str)  # dtype=str to preserve strings
             existing_df = existing_df.loc[:, ~existing_df.columns.str.contains('^Unnamed', na=False)]
+
+            # Clean existing data too
+            for col in existing_df.select_dtypes(include=['object']).columns:
+                existing_df[col] = existing_df[col].apply(to_ascii_only)
+
+            # Remove duplicate Address
             existing_df = existing_df[existing_df['Address'] != df['Address'].iloc[0]]
             df = pd.concat([existing_df, df], ignore_index=True)
 
-        # Save DataFrame without index to prevent 'Unnamed' columns
-        df.to_csv(output_path, index=False)
-        print(f"Data successfully saved to '{output_path}'")
+        # Save with pure UTF-8 and no index
+        df.to_csv(output_path, index=False, encoding='utf-8')
+        print(f"Data saved to '{output_path}' (non-ASCII characters removed)")
+
     except Exception as e:
-        print(f"Error saving to CSV: {e}")
+        print(f"Error saving CSV: {e}")
 
 def wei_to_eth(v_str):
     return int(v_str) / 1e18 if v_str else 0.0
@@ -625,7 +674,7 @@ def get_transaction_and_metadata(address, api_key):
     # if is_contract(address, api_key):
     #     FirstContract = 1
 
-    return pd.DataFrame([{
+    df=pd.DataFrame([{
         'Unnamed: 0': 0,
         'Index': 1,
         'Address': address,
@@ -679,7 +728,22 @@ def get_transaction_and_metadata(address, api_key):
         'ERC20_most_sent_token_type': most_sent_type,
         'ERC20_most_rec_token_type': most_rec_type
     }])
+    # Handle infinite values with 0
+    df.replace([np.inf, -np.inf], 0, inplace=True)
 
+    # Clip extremely large values to prevent overflow
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    df[numeric_cols] = df[numeric_cols].clip(lower=-1e18, upper=1e18)
+
+    # Verify no infinite or excessively large values
+    if np.isinf(df[numeric_cols].values).any():
+        print("WARNING: Infinite values still present!")
+    elif (df[numeric_cols].abs() > 1e18).any().any():
+        print("WARNING: Excessively large values still present!")
+    else:
+        print("✓ No infinite or excessively large values in data.")
+
+    return df
 # Prediction functions from the predict module
 
 def load_real_data(csv_path):
@@ -709,6 +773,21 @@ def load_real_data(csv_path):
 
     # Fill NaNs with 0 (same as training)
     df_clean = df_clean.fillna(0)
+
+    # NEW: Handle infinite values with 0
+    df_clean.replace([np.inf, -np.inf], 0, inplace=True)
+
+    # NEW: Clip extremely large values to prevent overflow
+    numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
+    df_clean[numeric_cols] = df_clean[numeric_cols].clip(lower=-1e18, upper=1e18)
+
+    # Verify no infinite or excessively large values
+    if np.isinf(df_clean[numeric_cols].values).any():
+        print("WARNING: Infinite values still present!")
+    elif (df_clean[numeric_cols].abs() > 1e18).any().any():
+        print("WARNING: Excessively large values still present!")
+    else:
+        print("✓ No infinite or excessively large values in data.")
 
     # Ensure all numeric (force float64)
     for col in df_clean.columns:
