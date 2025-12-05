@@ -746,6 +746,200 @@ def get_transaction_and_metadata(address, api_key):
     return df
 # Prediction functions from the predict module
 
+def process_offline_address(address):
+    """
+    Process already-downloaded raw data from raw/ folder.
+    Reconstructs the same DataFrame as get_transaction_and_metadata() but offline.
+    """
+    addr_lower = address.lower()
+    tx_path = f'raw/transactions-{addr_lower}.csv'
+    erc_path = f'raw/erc20_transactions-{addr_lower}.csv'
+    contract_cache_path = f'raw/contracts-{addr_lower}.json'
+
+    print(f"Loading offline data for {address}...")
+
+    if not os.path.exists(tx_path):
+        print(f"Missing: {tx_path}")
+        return None
+    if not os.path.exists(erc_path):
+        print(f"Missing: {erc_path}")
+        return None
+
+    txs = pd.read_csv(tx_path).to_dict('records')
+    erc_txs = pd.read_csv(erc_path).to_dict('records')
+
+    # Load contract cache
+    contract_cache = {}
+    if os.path.exists(contract_cache_path):
+        with open(contract_cache_path, 'r') as f:
+            contract_cache = json.load(f)
+        contract_cache = {k.lower(): v for k, v in contract_cache.items()}
+    else:
+        print(f"Warning: No contract cache found: {contract_cache_path}")
+        # Fallback: try global cache
+        global_cache = 'raw/contracts-total.json'
+        if os.path.exists(global_cache):
+            with open(global_cache, 'r') as f:
+                global_data = json.load(f)
+                contract_cache = {k.lower(): v for k, v in global_data.items()}
+
+    tempContract = 1 if contract_cache.get(addr_lower, False) else 0
+
+    # Reuse all your existing calc_* functions
+    # (They are already pure and work with list of dicts)
+
+    if not txs:
+        return pd.DataFrame([{
+            'Unnamed: 0': 0,
+            'Index': 1,
+            'Address': address,
+            'FLAG': 2,
+            'Contract': tempContract,
+            'Avg_min_between_sent_tnx': 0.0,
+            'Avg_min_between_received_tnx': 0.0,
+            'Time_Diff_between_first_and_last_(Mins)': 0.0,
+            'Sent_tnx': 0,
+            'Received_Tnx': 0,
+            'Number_of_Created_Contracts': 0,
+            'Unique_Received_From_Addresses': 0,
+            'Unique_Sent_To_Addresses': 0,
+            'min_value_received': 0.0,
+            'max_value_received': 0.0,
+            'avg_val_received': 0.0,
+            'min_val_sent': 0.0,
+            'max_val_sent': 0.0,
+            'avg_val_sent': 0.0,
+            'min_value_sent_to_contract': 0.0,
+            'max_val_sent_to_contract': 0.0,
+            'avg_value_sent_to_contract': 0.0,
+            'total_transactions_(including_tnx_to_create_contract': 0,
+            'total_Ether_sent': 0.0,
+            'total_ether_received': 0.0,
+            'total_ether_sent_contracts': 0.0,
+            'total_ether_balance': 0.0,
+            'Total_ERC20_tnxs': 0,
+            'ERC20_total_Ether_received': 0.0,
+            'ERC20_total_ether_sent': 0.0,
+            'ERC20_total_Ether_sent_contract': 0.0,
+            'ERC20_uniq_sent_addr': 0.0,
+            'ERC20_uniq_rec_addr': 0.0,
+            'ERC20_uniq_sent_addr.1': 0.0,
+            'ERC20_uniq_rec_contract_addr': 0.0,
+            'ERC20_avg_time_between_sent_tnx': 0.0,
+            'ERC20_avg_time_between_rec_tnx': 0.0,
+            'ERC20_avg_time_between_rec_2_tnx': 0.0,
+            'ERC20_avg_time_between_contract_tnx': 0.0,
+            'ERC20_min_val_rec': 0.0,
+            'ERC20_max_val_rec': 0.0,
+            'ERC20_avg_val_rec': 0.0,
+            'ERC20_min_val_sent': 0.0,
+            'ERC20_max_val_sent': 0.0,
+            'ERC20_avg_val_sent': 0.0,
+            'ERC20_min_val_sent_contract': 0.0,
+            'ERC20_max_val_sent_contract': 0.0,
+            'ERC20_avg_val_sent_contract': 0.0,
+            'ERC20_uniq_sent_token_name': 0.0,
+            'ERC20_uniq_rec_token_name': 0.0,
+            'ERC20_most_sent_token_type': '',
+            'ERC20_most_rec_token_type': ''
+        }])
+
+    # === All calculations (same as online version) ===
+    time_diff = calc_time_diff(txs)
+    sent_count, rec_count = calc_sent_received_counts(txs, address)
+    avg_sent_between = calc_avg_min_between([tx for tx in txs if tx['from'].lower() == addr_lower])
+    avg_rec_between = calc_avg_min_between([tx for tx in txs if tx['to'] and tx['to'].lower() == addr_lower])
+    created_count = calc_created_contracts(txs, address)
+    unique_rec_from, unique_sent_to = calc_unique_addresses(txs, address)
+
+    (min_rec, max_rec, avg_rec, min_sent, max_sent, avg_sent,
+     total_sent, total_rec) = calc_eth_values(txs, address)
+
+    (min_sent_contract, max_sent_contract, avg_sent_contract,
+     total_sent_contracts) = calc_eth_contract_values(txs, address, contract_cache)
+
+    total_tx = calc_total_transactions(sent_count, rec_count)
+    total_balance = calc_total_balance(total_sent, total_rec)
+    total_erc_tnxs = calc_erc20_counts(erc_txs, address)
+
+    (erc_total_rec, erc_total_sent, erc_min_rec, erc_max_rec, erc_avg_rec,
+     erc_min_sent, erc_max_sent, erc_avg_sent) = calc_erc20_values(erc_txs, address)
+
+    (erc_total_sent_contract, erc_min_sent_contract, erc_max_sent_contract,
+     erc_avg_sent_contract) = calc_erc20_contract_values(erc_txs, address, contract_cache)
+
+    (erc_uniq_sent_addr, erc_uniq_rec_addr,
+     erc_uniq_sent_addr1, erc_uniq_rec_contract) = calc_erc20_unique_addresses(erc_txs, address)
+
+    (erc_avg_sent_time, erc_avg_rec_time, erc_avg_rec2_time,
+     erc_avg_contract_time) = calc_erc20_time_metrics(erc_txs, address, contract_cache)
+
+    erc_uniq_sent_token, erc_uniq_rec_token = calc_erc20_token_names(erc_txs, address)
+    most_sent_type, most_rec_type = calc_erc20_most_token_types(erc_txs, address)
+
+    # Build final DataFrame (exact same structure)
+    df = pd.DataFrame([{
+        'Unnamed: 0': 0,
+        'Index': 1,
+        'Address': address,
+        'FLAG': 2,
+        'Contract': tempContract,
+        'Avg_min_between_sent_tnx': avg_sent_between,
+        'Avg_min_between_received_tnx': avg_rec_between,
+        'Time_Diff_between_first_and_last_(Mins)': time_diff,
+        'Sent_tnx': sent_count,
+        'Received_Tnx': rec_count,
+        'Number_of_Created_Contracts': created_count + tempContract,
+        'Unique_Received_From_Addresses': unique_rec_from,
+        'Unique_Sent_To_Addresses': unique_sent_to,
+        'min_value_received': min_rec,
+        'max_value_received': max_rec,
+        'avg_val_received': avg_rec,
+        'min_val_sent': min_sent,
+        'max_val_sent': max_sent,
+        'avg_val_sent': avg_sent,
+        'min_value_sent_to_contract': min_sent_contract,
+        'max_val_sent_to_contract': max_sent_contract,
+        'avg_value_sent_to_contract': avg_sent_contract,
+        'total_transactions_(including_tnx_to_create_contract': total_tx + tempContract,
+        'total_Ether_sent': total_sent,
+        'total_ether_received': total_rec,
+        'total_ether_sent_contracts': total_sent_contracts,
+        'total_ether_balance': total_balance,
+        'Total_ERC20_tnxs': total_erc_tnxs,
+        'ERC20_total_Ether_received': erc_total_rec,
+        'ERC20_total_ether_sent': erc_total_sent,
+        'ERC20_total_Ether_sent_contract': erc_total_sent_contract,
+        'ERC20_uniq_sent_addr': float(erc_uniq_sent_addr),
+        'ERC20_uniq_rec_addr': float(erc_uniq_rec_addr),
+        'ERC20_uniq_sent_addr.1': float(erc_uniq_sent_addr1),
+        'ERC20_uniq_rec_contract_addr': float(erc_uniq_rec_contract),
+        'ERC20_avg_time_between_sent_tnx': erc_avg_sent_time,
+        'ERC20_avg_time_between_rec_tnx': erc_avg_rec_time,
+        'ERC20_avg_time_between_rec_2_tnx': erc_avg_rec2_time,
+        'ERC20_avg_time_between_contract_tnx': erc_avg_contract_time,
+        'ERC20_min_val_rec': erc_min_rec,
+        'ERC20_max_val_rec': erc_max_rec,
+        'ERC20_avg_val_rec': erc_avg_rec,
+        'ERC20_min_val_sent': erc_min_sent,
+        'ERC20_max_val_sent': erc_max_sent,
+        'ERC20_avg_val_sent': erc_avg_sent,
+        'ERC20_min_val_sent_contract': erc_min_sent_contract,
+        'ERC20_max_val_sent_contract': erc_max_sent_contract,
+        'ERC20_avg_val_sent_contract': erc_avg_sent_contract,
+        'ERC20_uniq_sent_token_name': erc_uniq_sent_token,
+        'ERC20_uniq_rec_token_name': erc_uniq_rec_token,
+        'ERC20_most_sent_token_type': most_sent_type,
+        'ERC20_most_rec_token_type': most_rec_type
+    }])
+
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    df[numeric_cols] = df[numeric_cols].clip(lower=-1e18, upper=1e18)
+
+    print(f"Offline processing complete for {address}")
+    return df
+
 def load_real_data(csv_path):
     """
     Load single-row Etherscan data and clean it to match training pipeline
@@ -974,6 +1168,8 @@ def main():
     parser = argparse.ArgumentParser(description="Ethereum Address Crawler and Fraud Predictor")
     parser.add_argument('--C', action='store_true', help='Crawl mode: Crawl data for the addresses')
     parser.add_argument('--CaP', action='store_true', help='Crawl and Predict mode: Crawl data and then predict fraud')
+    parser.add_argument('--CO', action='store_true', help='Crawl Offline: Process raw/ data without API')
+    parser.add_argument('--COaP', action='store_true', help='Crawl Offline and Predict')
     parser.add_argument('--P', nargs='?', const='out.csv',
                         help='Predict mode: Predict fraud from CSV file (default: out.csv)')
     parser.add_argument('--address', help='Ethereum addresses to crawl or verify (comma-separated)')
@@ -981,9 +1177,26 @@ def main():
 
     args = parser.parse_args()
 
-    mode_count = sum([args.C, args.CaP, args.P is not None])
+    mode_count = sum([args.C, args.CaP, args.CO, args.COaP, args.P is not None])
     if mode_count != 1:
         parser.error("Exactly one mode must be specified: --C, --CaP, or --P")
+
+    if args.CO or args.COaP:
+        if not args.address:
+            parser.error("--address is required for --CO or --COaP")
+        addresses = [a.strip() for a in args.address.split(',') if a.strip()]
+        output_file = 'out.csv'
+
+        for i, addr in enumerate(addresses, 1):
+            print(f"\n[OFFLINE] Processing {i}/{len(addresses)}: {addr}")
+            df_new = process_offline_address(addr)
+            if df_new is not None:
+                save_to_csv(df_new, output_file, mode='a')
+                print(f"Saved offline data to {output_file}")
+                if args.COaP:
+                    predict_fraud(output_file, address=addr)
+            else:
+                print(f"Failed to process {addr} — missing raw files")
 
     if args.C or args.CaP:
         if not args.address:

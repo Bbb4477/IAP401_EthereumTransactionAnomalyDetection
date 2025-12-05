@@ -19,6 +19,8 @@ echo "ETHERSCAN_API_KEY=YourApiKey" > .env
     options:
     -h, --help         show this help message and exit
     --C                Crawl mode: Crawl data for the address
+    --CO               Offline Calculate mode: Recalculate data row with crawled data in /raw
+    --COaP             Offline Calculate and Predict mode: Recalculate data row and predict with crawled data in /raw
     --CaP              Crawl and Predict mode: Crawl data and then predict fraud
     --P [P]            Predict mode: Predict fraud from CSV file (default: out.csv)
     --address ADDRESS  Ethereum address to crawl or verify
